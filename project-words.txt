@@ -8,6 +8,7 @@ Aideq
 Arvid
 Avicora
 Azureus
+BUILDPLATFORM
 Beránek
 Biriukov
 Bitflu
@@ -107,6 +108,7 @@ Subissues
 Swatinem
 Swiftbit
 Symfony
+TARGETPLATFORM
 TSIG
 Tebibytes
 Tera
