@@ -149,12 +149,15 @@ alekitto
 alives
 alloca
 alnum
+amd64
 analyse
 analysed
+applets
 appuser
 aquasec
 aquasecurity
 argjson
+arm64
 artefacts
 asdh
 asyn
@@ -275,6 +278,7 @@ gecos
 getaddrinfo
 gethostbyname
 ghac
+ghcr
 ghdata
 ghtoken
 githubmerge
@@ -341,6 +345,7 @@ libsqlite
 libstdc
 libtorrent
 libz
+linux
 llist
 lscr
 lycheeignore
@@ -516,6 +521,7 @@ stabilised
 stackoverflow
 staticlib
 strfmon
+subcommand
 subissue
 subkey
 subsec
