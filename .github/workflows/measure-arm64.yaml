@@ -1,37 +1,62 @@
-name: Measure arm64 build (throwaway, do not merge)
+name: Measure arm64 build (cargo-zigbuild, no QEMU, throwaway)
+
+# Throwaway: measures the QEMU-free `cargo-zigbuild` cross-build
+# (`Containerfile.cross`) against the QEMU-based production `Containerfile`.
+# Builds only — never pushes. Do not merge.
+#
+# Notes:
+#   * QEMU emulation is intentionally omitted. `Containerfile.cross`
+#     compiles fully-static `musl` binaries on `$BUILDPLATFORM` via Zig
+#     (`cargo-zigbuild`) and assembles the runtime with `COPY` only, so no
+#     architecture emulation is required.
+#   * The cross build uses the *default* feature set (not `--all-features`).
+#     The production `Containerfile` builds `--all-features`, which enables
+#     `quinn`/HTTP3 → `aws-lc-rs`, a cmake-based crate that needs separate
+#     cross-linking wiring (clang + `CMAKE_*_COMPILER` env) under cargo-zigbuild.
+#     Adding `--all-features` equivalence on arm64 is a documented follow-up
+#     once the base approach is validated here.
+#   * Build timing is reported by `docker/build-push-action` in the job log; the
+#     final `df -h` step captures disk pressure as the original throwaway did.
 
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.run_id }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
   measure:
-    name: Build (linux/amd64 + linux/arm64, QEMU, no push)
+    name: Build (linux/amd64 + linux/arm64, cargo-zigbuild, no QEMU, no push)
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 180
 
     steps:
       - id: checkout
         name: Checkout Repository
         uses: actions/checkout@v7.0.1
 
-      - id: setup-qemu
-        name: Set Up QEMU
-        uses: docker/setup-qemu-action@v4.4.0
-        with:
-          cache-image: false
-
       - id: setup
         name: Setup Buildx
         uses: docker/setup-buildx-action@v4.4.1
 
       - id: build
-        name: Build Tracker Image
+        name: Build Tracker Image (cargo-zigbuild cross-compile)
         uses: docker/build-push-action@v7.4.0
         with:
-          file: ./Containerfile
+          file: ./Containerfile.cross
           target: release
           platforms: linux/amd64,linux/arm64
           push: false
+          # No QEMU emulation: the builder runs on $BUILDPLATFORM
+          # (Zig cross-compiles for $TARGETPLATFORM) and runtime stages are
+          # COPY-only on $TARGETPLATFORM.
 
       - id: disk
         name: Report disk usage

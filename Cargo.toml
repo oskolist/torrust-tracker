@@ -132,6 +132,20 @@ url = { version = "2", features = [ "serde" ] }
 # `nix` provides typed, safe delivery of POSIX signals to the exact child PID.
 nix = { version = "0.31.3", default-features = false, features = [ "signal" ] }
 
+[target.'cfg(target_env = "musl")'.dependencies]
+# Enable statically-vendored OpenSSL for cross-compilation to `musl` targets
+# (e.g. `aarch64-unknown-linux-musl` / `x86_64-unknown-linux-musl` via
+# `cargo-zigbuild`). The glibc production builds use system OpenSSL; no system
+# cross-OpenSSL exists for `musl`, so the vendored build — compiled from source
+# through the Zig C compiler — is required instead.
+#
+# Gated on `target_env = "musl"` so it is inert for glibc: the production
+# Containerfile, CI's `cargo test --all-features`, and the pre-commit
+# `cargo machete --with-metadata` step (all running for the glibc host target)
+# never activate this dependency, so the committed `Cargo.lock` and every
+# glibc build are completely unaffected.
+native-tls = { version = "0.2", features = [ "vendored" ] }
+
 [workspace]
 # skill-link: add-workspace-member
 # related-artifact: .dockerignore — every member must be admitted to the Docker

@@ -135,6 +135,7 @@ Xeon
 Xtorrent
 Xunlei
 Zeroizing
+aarch64
 abdurazzoqovjavohir
 acgnxtracker
 acks
@@ -180,6 +181,7 @@ bools
 bottlenecked
 bufs
 buildid
+buildx
 byteorder
 callgrind
 callsites
@@ -195,6 +197,7 @@ chrono
 ciphertext
 clippy
 cloneable
+cmake
 codecov
 codegen
 colour
@@ -275,6 +278,7 @@ ghac
 ghdata
 ghtoken
 githubmerge
+glibc
 gpgsign
 gzprintf
 gzvprintf
@@ -362,6 +366,7 @@ monomorphisation
 mprotect
 mpsc
 multimap
+musl
 myacicontext
 mysqladmin
 mysqld
@@ -395,6 +400,7 @@ oneline
 oneshot
 openexr
 openmetrics
+openssl
 opentracker
 opentrackers
 optimisation
@@ -594,9 +600,12 @@ withf
 wordexp
 worktree
 writeln
+x86_64
 xxxxxxxxxxxxxxxxxxxxd
 yyyyyyyyyyyyyyyyyyyyd
 zerocopy
 zeroize
+zig
+zigbuild
 zstd
 ñaca
