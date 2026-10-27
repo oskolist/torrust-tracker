@@ -53,7 +53,7 @@
 # `RUN zig version` below prints it. (Pin a digest/tag for production use.)
 # hadolint ignore=DL3007
 FROM --platform=$BUILDPLATFORM ghcr.io/rust-cross/cargo-zigbuild:latest AS builder
-
+ARG TARGETPLATFORM
 WORKDIR /build
 # The whole allow-listed repository is the build context (see .dockerignore).
 # `.cargo/config.toml` (rustflags, e.g. `-D warnings`) and `Cargo.lock` are
