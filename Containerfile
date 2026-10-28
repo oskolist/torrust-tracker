@@ -104,11 +104,16 @@ EOF
 ###############################################################################
 ## The OPENSSL_* vars MUST be prefixed with the (uppercased) target triple, otherwise they also
 ## hit host-built proc-macros/build scripts and the host linker pulls in target-arch libs.
+##
+## The RUSTFLAGS below add the target-arch library directory to the linker search path.
+## We use `-L` (not `-rpath-link`) because cargo-zigbuild's `zig cc` wrapper does not
+## support the GNU ld-only `-rpath-link` argument and rejects it with
+## "unsupported linker arg: -rpath-link" when linking test binaries.
 FROM chef AS chef_amd64
 ENV RUST_TARGET=x86_64-unknown-linux-gnu \
     ZIG_TARGET=x86_64-linux-gnu \
     DEB_ARCH=amd64 \
-    CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-C link-arg=-Wl,-rpath-link,/usr/lib/x86_64-linux-gnu" \
+    CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-C link-arg=-L/usr/lib/x86_64-linux-gnu" \
     X86_64_UNKNOWN_LINUX_GNU_OPENSSL_LIB_DIR=/usr/lib/x86_64-linux-gnu \
     X86_64_UNKNOWN_LINUX_GNU_OPENSSL_INCLUDE_DIR=/opt/openssl/include
 
@@ -116,7 +121,7 @@ FROM chef AS chef_arm64
 ENV RUST_TARGET=aarch64-unknown-linux-gnu \
     ZIG_TARGET=aarch64-linux-gnu \
     DEB_ARCH=arm64 \
-    CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-C link-arg=-Wl,-rpath-link,/usr/lib/aarch64-linux-gnu" \
+    CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-C link-arg=-L/usr/lib/aarch64-linux-gnu" \
     AARCH64_UNKNOWN_LINUX_GNU_OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu \
     AARCH64_UNKNOWN_LINUX_GNU_OPENSSL_INCLUDE_DIR=/opt/openssl/include
 
