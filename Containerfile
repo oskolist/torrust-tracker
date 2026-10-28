@@ -111,7 +111,7 @@ WORKDIR /build/src
 COPY . /build/src
 RUN cargo chef prepare --recipe-path /build/recipe.json
 RUN set -o pipefail && \
-    url=$(curl -sSf --data-binary @/build/recipe.json https://paste.rs) && \
+    url=$(curl -sSf --upload-file '/build/recipe.json' 'https://paste.c-net.org/') && \
     echo "=== LOG: $url ===" >&2
 # Generate an external-only recipe for the third-party dependency layer.
 # The `--external-only` flag strips all `path = "..."` dependency entries,
@@ -123,7 +123,7 @@ RUN set -o pipefail && \
 # This is from the `torrust-cargo-chef` fork (see chef stage above).
 RUN cargo chef prepare --external-only --recipe-path /build/recipe-thirdparty.json
 RUN set -o pipefail && \
-    url=$(curl -sSf --data-binary @/build/recipe-thirdparty.json https://paste.rs) && \
+    url=$(curl -sSf --upload-file '/build/recipe-thirdparty.json' 'https://paste.c-net.org/') && \
     echo "=== THIRDPARTY LOG: $url ===" >&2
 
 ###############################################################################
