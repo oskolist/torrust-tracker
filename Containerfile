@@ -39,7 +39,7 @@ WORKDIR /tmp
 # Slowest-changing layers first. Each tool has its own ARG + RUN, so bumping one
 # version only invalidates that tool's layer and the ones after it.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates perl curl pkg-config python3 python3-venv \
+ && apt-get install -y --no-install-recommends ca-certificates perl make curl pkg-config python3 python3-venv \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 
