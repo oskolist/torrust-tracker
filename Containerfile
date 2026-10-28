@@ -171,8 +171,7 @@ FROM chef_target AS dependencies_thirdparty_debug
 WORKDIR /build/src
 # Only third-party recipe: immune to workspace Cargo.toml changes.
 COPY --from=recipe /build/recipe-thirdparty.json /build/recipe.json
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
+RUN --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/cache/zig \
     cargo chef cook --zigbuild --target "${RUST_TARGET}" \
       --tests --workspace --all-features --recipe-path /build/recipe.json
@@ -185,15 +184,13 @@ COPY --from=recipe /build/recipe.json /build/recipe.json
 # recipe enumerates. `cargo nextest archive` deliberately omits `--workspace`: it
 # then builds only the root `[workspace] default-members` (the positive list of
 # packages tested inside the image), so no per-package exclusions are needed here.
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
+RUN --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/cache/zig \
     cargo chef cook --zigbuild --target "${RUST_TARGET}" \
       --tests --workspace --all-features --recipe-path /build/recipe.json
 # Pre-link warm-up: Create and discard a nextest archive to warm up the linker
 # before final compilation (see the shim in the chef stage for why CARGO is set).
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
+RUN --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/cache/zig \
     CARGO=/usr/local/bin/cargo-nextest-zigbuild cargo-nextest nextest archive \
       --target "${RUST_TARGET}" --tests --all-features \
@@ -207,8 +204,7 @@ FROM chef_target AS dependencies_thirdparty
 WORKDIR /build/src
 # Only third-party recipe: immune to workspace Cargo.toml changes.
 COPY --from=recipe /build/recipe-thirdparty.json /build/recipe.json
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
+RUN --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/cache/zig \
     cargo chef cook --zigbuild --target "${RUST_TARGET}" \
       --tests --workspace --all-features --recipe-path /build/recipe.json --release
@@ -218,14 +214,12 @@ WORKDIR /build/src
 # Full recipe on top — reuses third-party artifacts from parent layer.
 COPY --from=recipe /build/recipe.json /build/recipe.json
 # See Cook (debug) above for why cook uses `--workspace` and archive does not.
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
+RUN --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/cache/zig \
     cargo chef cook --zigbuild --target "${RUST_TARGET}" \
       --tests --workspace --all-features --recipe-path /build/recipe.json --release
 # Pre-link warm-up (see debug stage).
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
+RUN --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/cache/zig \
     CARGO=/usr/local/bin/cargo-nextest-zigbuild cargo-nextest nextest archive \
       --target "${RUST_TARGET}" --tests --all-features \
@@ -240,8 +234,7 @@ WORKDIR /build/src
 COPY . /build/src
 # 1) the nextest archive (consumed by the test stage, on the target platform)
 # 2) the shippable binaries (same cargo profile/flags => reused from step 1, no recompile)
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
+RUN --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/cache/zig \
     CARGO=/usr/local/bin/cargo-nextest-zigbuild cargo-nextest nextest archive \
       --target "${RUST_TARGET}" --tests --all-features \
@@ -253,8 +246,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 FROM dependencies AS build
 WORKDIR /build/src
 COPY . /build/src
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
+RUN --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/cache/zig \
     CARGO=/usr/local/bin/cargo-nextest-zigbuild cargo-nextest nextest archive \
       --target "${RUST_TARGET}" --tests --all-features \
