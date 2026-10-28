@@ -145,6 +145,8 @@ nix = { version = "0.31.3", default-features = false, features = [ "signal" ] }
 # never activate this dependency, so the committed `Cargo.lock` and every
 # glibc build are completely unaffected.
 native-tls = { version = "0.2", features = [ "vendored" ] }
+[target.'cfg(target_env = "gnu")'.dependencies]
+native-tls = { version = "0.2", features = [ "vendored" ] }
 
 [workspace]
 # skill-link: add-workspace-member
