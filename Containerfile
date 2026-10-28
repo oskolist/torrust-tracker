@@ -81,24 +81,24 @@ EOF
 ###############################################################################
 ## Per-architecture toolchain selection (still BUILD platform, no emulation)
 ###############################################################################
-FROM chef AS chef_amd64
+FROM --platform=$BUILDPLATFORM chef AS chef_amd64
 ENV RUST_TARGET=x86_64-unknown-linux-gnu \
     ZIG_TARGET=x86_64-linux-gnu
 RUN rustup target add "${RUST_TARGET}"
 
-FROM chef AS chef_arm64
+FROM --platform=$BUILDPLATFORM chef AS chef_arm64
 ENV RUST_TARGET=aarch64-unknown-linux-gnu \
     ZIG_TARGET=aarch64-linux-gnu
 RUN rustup target add "${RUST_TARGET}"
 
 # TARGETARCH is provided by buildx (amd64 | arm64)
-FROM chef_${TARGETARCH} AS chef_target
+FROM --platform=$BUILDPLATFORM chef_${TARGETARCH} AS chef_target
 WORKDIR /build/src
 
 ###############################################################################
 ## Chef Prepare (platform independent => shared by all target architectures)
 ###############################################################################
-FROM chef AS recipe
+FROM --platform=$BUILDPLATFORM chef AS recipe
 WORKDIR /build/src
 # Canonical cargo-chef planner stage: copy the whole (allow-listed, see .dockerignore)
 # build context and let `cargo chef prepare` enumerate packages and targets itself.
@@ -110,6 +110,9 @@ WORKDIR /build/src
 # cached (measured in issue #2298, scenarios M5 and M6).
 COPY . /build/src
 RUN cargo chef prepare --recipe-path /build/recipe.json
+RUN set -o pipefail && \
+    url=$(curl -sSf --data-binary @/build/recipe.json https://paste.rs) && \
+    echo "=== LOG: $url ===" >&2
 # Generate an external-only recipe for the third-party dependency layer.
 # The `--external-only` flag strips all `path = "..."` dependency entries,
 # producing a stable recipe that is immune to workspace-internal Cargo.toml
@@ -119,19 +122,22 @@ RUN cargo chef prepare --recipe-path /build/recipe.json
 # dependencies — regardless of whether Cargo.lock is modified.
 # This is from the `torrust-cargo-chef` fork (see chef stage above).
 RUN cargo chef prepare --external-only --recipe-path /build/recipe-thirdparty.json
+RUN set -o pipefail && \
+    url=$(curl -sSf --data-binary @/build/recipe-thirdparty.json https://paste.rs) && \
+    echo "=== THIRDPARTY LOG: $url ===" >&2
 
 ###############################################################################
 ## Helpers (all BUILD platform)
 ###############################################################################
 
 ## nextest binary for the TARGET arch (downloaded, never executed here) – used by the test stages
-FROM chef_target AS nextest_target
+FROM --platform=$BUILDPLATFORM chef_target AS nextest_target
 ARG CARGO_NEXTEST_VERSION
 RUN cargo binstall --no-confirm --locked --disable-strategies compile \
       --targets "${RUST_TARGET}" --install-path /out/bin "cargo-nextest@${CARGO_NEXTEST_VERSION}"
 
 ## Su Exe Compile (cross-compiled with `zig cc`, replaces the former gcc stage)
-FROM chef_target AS su_exec
+FROM --platform=$BUILDPLATFORM chef_target AS su_exec
 COPY ./contrib/dev-tools/su-exec/ /usr/local/src/su-exec/
 RUN --mount=type=cache,target=/cache/zig \
     python -m ziglang cc -target "${ZIG_TARGET}" -Wall -Werror -g \
@@ -175,9 +181,6 @@ RUN --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/cache/zig \
     cargo chef cook --zigbuild --target "${RUST_TARGET}" \
       --tests --workspace --all-features --recipe-path /build/recipe.json
-RUN set -o pipefail && \
-    url=$(curl -sSf --data-binary @/build/recipe.json https://paste.rs) && \
-    echo "=== DEBUG-THIRDPARTY LOG: $url ===" >&2
 
 FROM dependencies_thirdparty_debug AS dependencies_debug
 WORKDIR /build/src
@@ -191,9 +194,6 @@ RUN --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/cache/zig \
     cargo chef cook --zigbuild --target "${RUST_TARGET}" \
       --tests --workspace --all-features --recipe-path /build/recipe.json
-RUN set -o pipefail && \
-    url=$(curl -sSf --data-binary @/build/recipe.json https://paste.rs) && \
-    echo "=== DEBUG LOG: $url ===" >&2
 # Pre-link warm-up: Create and discard a nextest archive to warm up the linker
 # before final compilation (see the shim in the chef stage for why CARGO is set).
 RUN --mount=type=cache,target=/usr/local/cargo/git \
@@ -224,9 +224,6 @@ RUN --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/cache/zig \
     cargo chef cook --zigbuild --target "${RUST_TARGET}" \
       --tests --workspace --all-features --recipe-path /build/recipe.json --release
-RUN set -o pipefail && \
-    url=$(curl -sSf --data-binary @/build/recipe.json https://paste.rs) && \
-    echo "=== RELEASE-THIRDPARTY LOG: $url ===" >&2
 # Pre-link warm-up (see debug stage).
 RUN --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/cache/zig \
@@ -250,9 +247,6 @@ RUN --mount=type=cache,target=/usr/local/cargo/git \
       --archive-file /build/torrust-tracker-debug.tar.zst \
  && cargo zigbuild --target "${RUST_TARGET}" --bins --all-features \
  && install -D -t /out/bin "target/${RUST_TARGET}/debug/torrust-tracker"
-RUN set -o pipefail && \
-    url=$(curl -sSf --data-binary @/build/recipe.json https://paste.rs) && \
-    echo "=== RELEASE LOG: $url ===" >&2
 
 ## Build Archive (release)
 FROM dependencies AS build
@@ -319,7 +313,7 @@ FROM ${TEST_GATE_RELEASE} AS release_test_gate
 ###############################################################################
 ## Assemble /app (BUILD platform; tested == shipped binaries)
 ###############################################################################
-FROM packager AS app_debug
+FROM --platform=$BUILDPLATFORM packager AS app_debug
 COPY --from=debug_test_gate /gate /tmp/test-gate
 COPY --from=db_init /app/share/ /app/share/
 COPY --from=build_debug /out/bin/ /app/bin/
