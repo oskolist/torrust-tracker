@@ -24,6 +24,10 @@ ARG CARGO_NEXTEST_VERSION=0.9.140
 ARG CARGO_ZIGBUILD_VERSION=0.24.0
 # Version of the `ziglang` PyPI package (ships the zig toolchain). Bump together with cargo-zigbuild.
 ARG ZIG_VERSION=0.15.1
+# glibc floor for the produced binaries. Must be >= the glibc that the target-arch
+# libssl/libcrypto (Debian trixie = 2.41) were built against, and <= the runtime image's glibc
+# (distroless cc-debian13 = 2.41).
+ARG GLIBC_VERSION=2.41
 
 # Which stage must succeed before the release/debug artifacts are packaged.
 # `test_*_passed` = run the tests (on $TARGETPLATFORM); `test_skipped` = don't.
@@ -65,34 +69,76 @@ ARG CARGO_ZIGBUILD_VERSION
 RUN cargo binstall --no-confirm --locked "cargo-zigbuild@${CARGO_ZIGBUILD_VERSION}"
 
 # `cargo nextest archive` builds through `$CARGO test --no-run`. This shim sends that one
-# call through `cargo-zigbuild` and forwards everything else (metadata, -vV, ...) to the
-# real cargo. Use it ONLY as `CARGO=... cargo-nextest nextest ...` (never as a global ENV).
+# call through `cargo-zigbuild` (rewriting the canonical `--target` to the glibc-suffixed
+# zig target, see https://github.com/nextest-rs/nextest/discussions/3185) and forwards
+# everything else (metadata, -vV, ...) to the real cargo.
+# Use it ONLY as `CARGO=... cargo-nextest nextest ...` (never as a global ENV).
 COPY --chmod=0755 <<"EOF" /usr/local/bin/cargo-nextest-zigbuild
 #!/bin/sh
 set -eu
 REAL_CARGO=/usr/local/cargo/bin/cargo
 if [ "${1:-}" = "test" ]; then
   export CARGO="$REAL_CARGO"   # avoid recursion: zigbuild must call the real cargo
+  n=$#
+  while [ "$n" -gt 0 ]; do
+    a=$1; shift
+    case "$a" in
+      "$RUST_TARGET")          a="$ZIG_BUILD_TARGET" ;;
+      "--target=$RUST_TARGET") a="--target=$ZIG_BUILD_TARGET" ;;
+    esac
+    set -- "$@" "$a"
+    n=$((n - 1))
+  done
   exec cargo-zigbuild "$@"
 fi
 exec "$REAL_CARGO" "$@"
 EOF
 
 ###############################################################################
-## Per-architecture toolchain selection (still BUILD platform, no emulation)
+## Per-architecture selection (BUILD platform, no emulation). Only ENV here.
+##   RUST_TARGET : rustc target triple (also the `target/<dir>` name)
+##   ZIG_TARGET  : zig triple == Debian multiarch triplet (used for /usr/lib/<triplet>)
+##   DEB_ARCH    : Debian architecture name
 ###############################################################################
 FROM chef AS chef_amd64
 ENV RUST_TARGET=x86_64-unknown-linux-gnu \
-    ZIG_TARGET=x86_64-linux-gnu
-RUN rustup target add "${RUST_TARGET}"
+    ZIG_TARGET=x86_64-linux-gnu \
+    DEB_ARCH=amd64 \
+    CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-C link-arg=-Wl,-rpath-link,/usr/lib/x86_64-linux-gnu"
 
 FROM chef AS chef_arm64
 ENV RUST_TARGET=aarch64-unknown-linux-gnu \
-    ZIG_TARGET=aarch64-linux-gnu
-RUN rustup target add "${RUST_TARGET}"
+    ZIG_TARGET=aarch64-linux-gnu \
+    DEB_ARCH=arm64 \
+    CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-C link-arg=-Wl,-rpath-link,/usr/lib/aarch64-linux-gnu"
 
+## Target toolchain: rust std for the target + target-arch OpenSSL (dev files only used to LINK).
 # TARGETARCH is provided by buildx (amd64 | arm64)
 FROM chef_${TARGETARCH} AS chef_target
+ARG GLIBC_VERSION
+ENV ZIG_BUILD_TARGET="${RUST_TARGET}.${GLIBC_VERSION}"
+
+# Target-arch OpenSSL via Debian multiarch (nothing from it is ever executed here).
+#  * zig always uses `-nostdinc`, so Debian's split header layout
+#    (/usr/include/openssl + /usr/include/<triplet>/openssl/configuration.h)
+#    is merged into ONE directory that is passed as OPENSSL_INCLUDE_DIR.
+#    (We deliberately do NOT add /usr/include to zig's include path: host glibc headers
+#    would clash with zig's own libc headers.)
+#  * /opt/openssl/runtime holds the shared objects needed to *run* test binaries in `tester`.
+RUN set -eux; \
+    dpkg --add-architecture "${DEB_ARCH}"; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends "libssl-dev:${DEB_ARCH}"; \
+    mkdir -p /opt/openssl/include /opt/openssl/runtime; \
+    cp -a /usr/include/openssl /opt/openssl/include/; \
+    cp -a "/usr/include/${ZIG_TARGET}/openssl/." /opt/openssl/include/openssl/; \
+    cp -L "/usr/lib/${ZIG_TARGET}/libssl.so.3" "/usr/lib/${ZIG_TARGET}/libcrypto.so.3" /opt/openssl/runtime/; \
+    apt-get clean; \
+    rm -rf /var/lib/apt/lists/*
+ENV OPENSSL_LIB_DIR="/usr/lib/${ZIG_TARGET}" \
+    OPENSSL_INCLUDE_DIR=/opt/openssl/include
+
+RUN rustup target add "${RUST_TARGET}"
 WORKDIR /build/src
 
 ###############################################################################
@@ -125,13 +171,13 @@ RUN cargo chef prepare --external-only --recipe-path /build/recipe-thirdparty.js
 ###############################################################################
 
 ## nextest binary for the TARGET arch (downloaded, never executed here) – used by the test stages
-FROM chef_target AS nextest_target
+FROM chef_${TARGETARCH} AS nextest_target
 ARG CARGO_NEXTEST_VERSION
 RUN cargo binstall --no-confirm --locked --disable-strategies compile \
       --targets "${RUST_TARGET}" --install-path /out/bin "cargo-nextest@${CARGO_NEXTEST_VERSION}"
 
 ## Su Exe Compile (cross-compiled with `zig cc`, replaces the former gcc stage)
-FROM chef_target AS su_exec
+FROM chef_${TARGETARCH} AS su_exec
 COPY ./contrib/dev-tools/su-exec/ /usr/local/src/su-exec/
 RUN --mount=type=cache,target=/cache/zig \
     python -m ziglang cc -target "${ZIG_TARGET}" -Wall -Werror -g \
@@ -174,7 +220,7 @@ COPY --from=recipe /build/recipe-thirdparty.json /build/recipe.json
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/cache/zig \
-    cargo chef cook --zigbuild --target "${RUST_TARGET}" \
+    cargo chef cook --zigbuild --target "${ZIG_BUILD_TARGET}" \
       --tests --workspace --all-features --recipe-path /build/recipe.json
 
 FROM dependencies_thirdparty_debug AS dependencies_debug
@@ -188,7 +234,7 @@ COPY --from=recipe /build/recipe.json /build/recipe.json
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/cache/zig \
-    cargo chef cook --zigbuild --target "${RUST_TARGET}" \
+    cargo chef cook --zigbuild --target "${ZIG_BUILD_TARGET}" \
       --tests --workspace --all-features --recipe-path /build/recipe.json
 # Pre-link warm-up: Create and discard a nextest archive to warm up the linker
 # before final compilation (see the shim in the chef stage for why CARGO is set).
@@ -210,7 +256,7 @@ COPY --from=recipe /build/recipe-thirdparty.json /build/recipe.json
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/cache/zig \
-    cargo chef cook --zigbuild --target "${RUST_TARGET}" \
+    cargo chef cook --zigbuild --target "${ZIG_BUILD_TARGET}" \
       --tests --workspace --all-features --recipe-path /build/recipe.json --release
 
 FROM dependencies_thirdparty AS dependencies
@@ -221,7 +267,7 @@ COPY --from=recipe /build/recipe.json /build/recipe.json
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/cache/zig \
-    cargo chef cook --zigbuild --target "${RUST_TARGET}" \
+    cargo chef cook --zigbuild --target "${ZIG_BUILD_TARGET}" \
       --tests --workspace --all-features --recipe-path /build/recipe.json --release
 # Pre-link warm-up (see debug stage).
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
@@ -240,13 +286,14 @@ WORKDIR /build/src
 COPY . /build/src
 # 1) the nextest archive (consumed by the test stage, on the target platform)
 # 2) the shippable binaries (same cargo profile/flags => reused from step 1, no recompile)
+# NOTE: zigbuild strips the `.<glibc>` suffix for the output dir => target/${RUST_TARGET}/...
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/cache/zig \
     CARGO=/usr/local/bin/cargo-nextest-zigbuild cargo-nextest nextest archive \
       --target "${RUST_TARGET}" --tests --all-features \
       --archive-file /build/torrust-tracker-debug.tar.zst \
- && cargo zigbuild --target "${RUST_TARGET}" --bins --all-features \
+ && cargo zigbuild --target "${ZIG_BUILD_TARGET}" --bins --all-features \
  && install -D -t /out/bin "target/${RUST_TARGET}/debug/torrust-tracker"
 
 ## Build Archive (release)
@@ -259,17 +306,20 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     CARGO=/usr/local/bin/cargo-nextest-zigbuild cargo-nextest nextest archive \
       --target "${RUST_TARGET}" --tests --all-features \
       --archive-file /build/torrust-tracker.tar.zst --release \
- && cargo zigbuild --target "${RUST_TARGET}" --bins --all-features --release \
+ && cargo zigbuild --target "${ZIG_BUILD_TARGET}" --bins --all-features --release \
  && install -D -t /out/bin \
       "target/${RUST_TARGET}/release/torrust-tracker" \
       "target/${RUST_TARGET}/release/http_health_check"
 
 ###############################################################################
 ## Tester Image — the ONLY place that runs on $TARGETPLATFORM.
-## No RUN here: nextest is a downloaded target-arch binary, the DB comes from db_init.
+## No RUN here: nextest is a downloaded target-arch binary, the DB comes from db_init,
+## and libssl/libcrypto (needed by the test binaries) are copied from `chef_target`.
 ###############################################################################
 FROM --platform=$TARGETPLATFORM docker.io/library/rust:slim-trixie AS tester
 COPY --from=nextest_target /out/bin/cargo-nextest /usr/local/bin/cargo-nextest
+COPY --from=chef_target /opt/openssl/runtime/ /usr/local/lib/openssl-runtime/
+ENV LD_LIBRARY_PATH=/usr/local/lib/openssl-runtime
 COPY --from=db_init /app/share/ /app/share/
 
 # Extract and Test (debug)
@@ -314,16 +364,14 @@ FROM ${TEST_GATE_RELEASE} AS release_test_gate
 
 ###############################################################################
 ## Assemble /app (BUILD platform; tested == shipped binaries)
+## Runtime libs (libssl3t64, zlib1g, libzstd1, libc6) are already part of
+## gcr.io/distroless/cc-debian13, so nothing is bundled here.
 ###############################################################################
 FROM packager AS app_debug
 COPY --from=debug_test_gate /gate /tmp/test-gate
 COPY --from=db_init /app/share/ /app/share/
 COPY --from=build_debug /out/bin/ /app/bin/
-# Fail the build if the binary still wants a shared zlib (distroless has none).
-RUN for b in /app/bin/*; do \
-      readelf -d "$b" | grep NEEDED; \
-      if readelf -d "$b" | grep -q 'libz\.so'; then echo "$b needs libz.so" >&2; exit 1; fi; \
-    done \
+RUN for b in /app/bin/*; do echo "== $b"; readelf -d "$b" | grep NEEDED || true; done \
  && chown -R root:root /app \
  && chmod -R u=rw,go=r,a+X /app \
  && chmod -R a+x /app/bin
@@ -332,10 +380,7 @@ FROM packager AS app_release
 COPY --from=release_test_gate /gate /tmp/test-gate
 COPY --from=db_init /app/share/ /app/share/
 COPY --from=build /out/bin/ /app/bin/
-RUN for b in /app/bin/*; do \
-      readelf -d "$b" | grep NEEDED; \
-      if readelf -d "$b" | grep -q 'libz\.so'; then echo "$b needs libz.so" >&2; exit 1; fi; \
-    done \
+RUN for b in /app/bin/*; do echo "== $b"; readelf -d "$b" | grep NEEDED || true; done \
  && chown -R root:root /app \
  && chmod -R u=rw,go=r,a+X /app \
  && chmod -R a+x /app/bin \
