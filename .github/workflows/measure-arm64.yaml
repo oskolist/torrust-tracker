@@ -20,6 +20,17 @@ name: Measure arm64 build (cargo-zigbuild, no QEMU, throwaway)
 
 on:
   workflow_dispatch:
+    inputs:
+      amd64:
+        type: boolean
+        description: Enable the linux/amd64 build
+        default: true
+        required: false
+      arm64:
+        type: boolean
+        description: Enable the linux/arm64 build
+        default: true
+        required: false
 
 permissions:
   contents: read
@@ -46,13 +57,30 @@ jobs:
         name: Setup Buildx
         uses: docker/setup-buildx-action@v4.4.1
 
+      - id: platforms
+        name: Determine target platforms
+        run: |
+          set -e
+          platforms=""
+          if ${{ inputs.amd64 }}; then
+            platforms="linux/amd64"
+          fi
+          if ${{ inputs.arm64 }}; then
+            if [ -n "$platforms" ]; then
+              platforms="$platforms,linux/arm64"
+            else
+              platforms="linux/arm64"
+            fi
+          fi
+          echo "platforms=$platforms" >> "$GITHUB_OUTPUT"
+
       - id: build
         name: Build Tracker Image (cargo-zigbuild cross-compile)
         uses: docker/build-push-action@v7.4.0
         with:
           file: ./Containerfile
           target: release
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ steps.platforms.outputs.platforms }}
           push: false
           # No QEMU emulation: the builder runs on $BUILDPLATFORM
           # (Zig cross-compiles for $TARGETPLATFORM) and runtime stages are
