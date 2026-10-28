@@ -63,7 +63,7 @@ RUN curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/ca
 # switch back to upstream `cargo-chef` and remove this comment.
 ARG TORRUST_CARGO_CHEF_VERSION
 #RUN cargo binstall --no-confirm --locked "torrust-cargo-chef@${TORRUST_CARGO_CHEF_VERSION}"
-RUN cargo binstall --no-confirm --locked --git https://github.com/oskolist/cargo-chef.git
+RUN cargo binstall --no-confirm --locked --git https://github.com/oskolist/cargo-chef.git torrust-tracker
 
 ARG CARGO_NEXTEST_VERSION
 RUN cargo binstall --no-confirm --locked "cargo-nextest@${CARGO_NEXTEST_VERSION}"
