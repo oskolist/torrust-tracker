@@ -177,7 +177,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/git \
       --tests --workspace --all-features --recipe-path /build/recipe.json
 RUN set -o pipefail && \
     url=$(curl -sSf --data-binary @/build/recipe.json https://paste.rs) && \
-    echo "=== DEBUG LOG: $url ===" >&2
+    echo "=== DEBUG-THIRDPARTY LOG: $url ===" >&2
 
 FROM dependencies_thirdparty_debug AS dependencies_debug
 WORKDIR /build/src
@@ -224,6 +224,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/cache/zig \
     cargo chef cook --zigbuild --target "${RUST_TARGET}" \
       --tests --workspace --all-features --recipe-path /build/recipe.json --release
+RUN set -o pipefail && \
+    url=$(curl -sSf --data-binary @/build/recipe.json https://paste.rs) && \
+    echo "=== RELEASE-THIRDPARTY LOG: $url ===" >&2
 # Pre-link warm-up (see debug stage).
 RUN --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/cache/zig \
@@ -247,6 +250,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/git \
       --archive-file /build/torrust-tracker-debug.tar.zst \
  && cargo zigbuild --target "${RUST_TARGET}" --bins --all-features \
  && install -D -t /out/bin "target/${RUST_TARGET}/debug/torrust-tracker"
+RUN set -o pipefail && \
+    url=$(curl -sSf --data-binary @/build/recipe.json https://paste.rs) && \
+    echo "=== RELEASE LOG: $url ===" >&2
 
 ## Build Archive (release)
 FROM dependencies AS build
