@@ -58,12 +58,18 @@ ENV PATH="/opt/zig/bin:${PATH}" \
 
 RUN curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
 
-# Note: We use the `torrust-cargo-chef` fork while upstream PR
+# Note: We use our `torrust-cargo-chef` fork while upstream PR
 # https://github.com/LukeMathWalker/cargo-chef/pull/360 is pending. Once merged,
 # switch back to upstream `cargo-chef` and remove this comment.
-ARG TORRUST_CARGO_CHEF_VERSION
-#RUN cargo binstall --no-confirm --locked "torrust-cargo-chef@${TORRUST_CARGO_CHEF_VERSION}"
-RUN cargo binstall --no-confirm --locked --git https://github.com/oskolist/cargo-chef.git torrust-tracker
+# Fork package name: `torrust-cargo-chef` (binary: `cargo-chef`).
+#
+# We use `cargo install --git` instead of `cargo binstall --git` because the
+# fork has no GitHub releases — `cargo binstall` can only download prebuilt
+# binaries from releases and will fail with "Not found" when none exist.
+# `cargo install --git` compiles the crate from source, which works without
+# releases. The fork's default branch (`main`) carries both the `--external-only`
+# and `--zigbuild` features used below, plus the libc-version-stripping fix.
+RUN cargo install --locked --git https://github.com/oskolist/cargo-chef.git torrust-cargo-chef
 
 ARG CARGO_NEXTEST_VERSION
 RUN cargo binstall --no-confirm --locked "cargo-nextest@${CARGO_NEXTEST_VERSION}"
