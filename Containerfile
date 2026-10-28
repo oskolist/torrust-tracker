@@ -42,8 +42,10 @@ WORKDIR /tmp
 
 # Slowest-changing layers first. Each tool has its own ARG + RUN, so bumping one
 # version only invalidates that tool's layer and the ones after it.
+# libssl-dev (NATIVE arch) is for host-side artifacts only: proc-macros and build scripts
+# (e.g. sqlx-macros -> native-tls -> openssl-sys) are always compiled for the build host.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl pkg-config python3 python3-venv \
+ && apt-get install -y --no-install-recommends ca-certificates curl libssl-dev pkg-config python3 python3-venv \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 
@@ -100,17 +102,23 @@ EOF
 ##   ZIG_TARGET  : zig triple == Debian multiarch triplet (used for /usr/lib/<triplet>)
 ##   DEB_ARCH    : Debian architecture name
 ###############################################################################
+## The OPENSSL_* vars MUST be prefixed with the (uppercased) target triple, otherwise they also
+## hit host-built proc-macros/build scripts and the host linker pulls in target-arch libs.
 FROM chef AS chef_amd64
 ENV RUST_TARGET=x86_64-unknown-linux-gnu \
     ZIG_TARGET=x86_64-linux-gnu \
     DEB_ARCH=amd64 \
-    CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-C link-arg=-Wl,-rpath-link,/usr/lib/x86_64-linux-gnu"
+    CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-C link-arg=-Wl,-rpath-link,/usr/lib/x86_64-linux-gnu" \
+    X86_64_UNKNOWN_LINUX_GNU_OPENSSL_LIB_DIR=/usr/lib/x86_64-linux-gnu \
+    X86_64_UNKNOWN_LINUX_GNU_OPENSSL_INCLUDE_DIR=/opt/openssl/include
 
 FROM chef AS chef_arm64
 ENV RUST_TARGET=aarch64-unknown-linux-gnu \
     ZIG_TARGET=aarch64-linux-gnu \
     DEB_ARCH=arm64 \
-    CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-C link-arg=-Wl,-rpath-link,/usr/lib/aarch64-linux-gnu"
+    CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-C link-arg=-Wl,-rpath-link,/usr/lib/aarch64-linux-gnu" \
+    AARCH64_UNKNOWN_LINUX_GNU_OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu \
+    AARCH64_UNKNOWN_LINUX_GNU_OPENSSL_INCLUDE_DIR=/opt/openssl/include
 
 ## Target toolchain: rust std for the target + target-arch OpenSSL (dev files only used to LINK).
 # TARGETARCH is provided by buildx (amd64 | arm64)
@@ -135,8 +143,6 @@ RUN set -eux; \
     cp -L "/usr/lib/${ZIG_TARGET}/libssl.so.3" "/usr/lib/${ZIG_TARGET}/libcrypto.so.3" /opt/openssl/runtime/; \
     apt-get clean; \
     rm -rf /var/lib/apt/lists/*
-ENV OPENSSL_LIB_DIR="/usr/lib/${ZIG_TARGET}" \
-    OPENSSL_INCLUDE_DIR=/opt/openssl/include
 
 RUN rustup target add "${RUST_TARGET}"
 WORKDIR /build/src
