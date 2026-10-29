@@ -117,17 +117,29 @@ EOF
 ## support the GNU ld-only `-rpath-link` argument and rejects it with
 ## "unsupported linker arg: -rpath-link" when linking test binaries.
 FROM chef AS chef_amd64
+# Set CC/CXX explicitly so the cc crate always finds a zig-backed cross-compiler,
+# even when the env is set via the cargo-nextest shim (where cargo-zigbuild's
+# add_env_if_missing may not propagate to build-script child processes).
+ARG GLIBC_VERSION
 ENV RUST_TARGET=x86_64-unknown-linux-gnu \
     ZIG_TARGET=x86_64-linux-gnu \
     DEB_ARCH=amd64 \
+    CC_x86_64_unknown_linux_gnu="zig cc -g -fno-sanitize=all -target ${ZIG_TARGET}.${GLIBC_VERSION}" \
+    CXX_x86_64_unknown_linux_gnu="zig c++ -g -fno-sanitize=all -target ${ZIG_TARGET}.${GLIBC_VERSION}" \
     CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-C link-arg=-L/usr/lib/x86_64-linux-gnu" \
     X86_64_UNKNOWN_LINUX_GNU_OPENSSL_LIB_DIR=/usr/lib/x86_64-linux-gnu \
     X86_64_UNKNOWN_LINUX_GNU_OPENSSL_INCLUDE_DIR=/opt/openssl/include
 
 FROM chef AS chef_arm64
+# Set CC/CXX explicitly so the cc crate always finds a zig-backed cross-compiler,
+# even when the env is set via the cargo-nextest shim (where cargo-zigbuild's
+# add_env_if_missing may not propagate to build-script child processes).
+ARG GLIBC_VERSION
 ENV RUST_TARGET=aarch64-unknown-linux-gnu \
     ZIG_TARGET=aarch64-linux-gnu \
     DEB_ARCH=arm64 \
+    CC_aarch64_unknown_linux_gnu="zig cc -g -fno-sanitize=all -target ${ZIG_TARGET}.${GLIBC_VERSION}" \
+    CXX_aarch64_unknown_linux_gnu="zig c++ -g -fno-sanitize=all -target ${ZIG_TARGET}.${GLIBC_VERSION}" \
     CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-C link-arg=-L/usr/lib/aarch64-linux-gnu" \
     AARCH64_UNKNOWN_LINUX_GNU_OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu \
     AARCH64_UNKNOWN_LINUX_GNU_OPENSSL_INCLUDE_DIR=/opt/openssl/include
