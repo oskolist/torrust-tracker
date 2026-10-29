@@ -42,8 +42,12 @@ WORKDIR /tmp
 # libssl-dev (NATIVE arch) is for host-side artifacts only: proc-macros and build scripts
 # (e.g. sqlx-macros -> native-tls -> openssl-sys) are always compiled for the build host.
 # NOTE: zig, cargo-zigbuild, clang, libclang-dev are pre-installed in the image.
+# cmake/ninja are NOT needed for aws-lc-sys (it uses the cc builder, not the
+# cmake builder, because pre-generated bindings are available). They are included
+# as a safety net for any transitive dependency that might invoke the cmake binary
+# directly in its build.rs (rather than through the cmake Rust crate).
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl libssl-dev pkg-config python3 python3-venv \
+ && apt-get install -y --no-install-recommends ca-certificates cmake curl libssl-dev ninja-build pkg-config python3 python3-venv \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 
