@@ -75,30 +75,47 @@ RUN cargo binstall --no-confirm --locked "cargo-nextest@${CARGO_NEXTEST_VERSION}
 
 # cargo-zigbuild is pre-installed in the ghcr.io/rust-cross/cargo-zigbuild image.
 
-# `cargo nextest archive` builds through `$CARGO test --no-run`. This shim sends that one
-# call through `cargo-zigbuild` (rewriting the canonical `--target` to the glibc-suffixed
-# zig target, see https://github.com/nextest-rs/nextest/discussions/3185) and forwards
-# everything else (metadata, -vV, ...) to the real cargo.
+# `cargo nextest archive` builds through `$CARGO [--color=...] test --no-run`.
+# IMPORTANT: cargo-nextest's CargoCli::all_args() (nextest source: cargo_cli.rs)
+# places the --color flag BEFORE the subcommand, so $1 is always --color=auto/
+# always/never — NEVER "test". An earlier version of this shim checked
+# `if [ "$1" = "test" ]`, which never matched, so it fell through to
+# `exec "$REAL_CARGO" "$@"`, bypassing cargo-zigbuild entirely. That meant
+# CC_*/CARGO_TARGET_*_LINKER were never set, and the cc crate fell back to the
+# default cross-compiler (`aarch64-linux-gnu-gcc`) which does not exist on the
+# aarch64 arm64 path.
+#
+# Fix: always delegate to `cargo-zigbuild` for every subcommand. cargo-zigbuild:
+#  1. Normalizes global args (--color=...) to after the subcommand
+#     (normalize_global_cargo_args in cargo-zigbuild src/bin/cargo-zigbuild.rs)
+#  2. For test/build/zigtest/zigbuild subcommands: calls apply_command_env which
+#     sets CC_*/CXX_*/CARGO_TARGET_*_LINKER to the zigcc wrapper script (which
+#     strips --target=<rust-triple> via LinkerArgFilter, linker_args.rs:105 —
+#     the cc crate v1.10.0 adds that flag, cc/src/lib.rs:3144, and `zig cc`
+#     chokes on it because "unknown" is not a valid zig OS name)
+#  3. For other subcommands (metadata, -vV, locate-project, ...): forwards to the
+#     real cargo via the CARGO env var we export below
+# The --target rewrite below converts the canonical rust triple (e.g.
+# aarch64-unknown-linux-gnu) to the glibc-suffixed zig target (e.g.
+# aarch64-unknown-linux-gnu.2.41), which cargo-zigbuild strips back internally.
+# See https://github.com/nextest-rs/nextest/discussions/3185
 # Use it ONLY as `CARGO=... cargo-nextest nextest ...` (never as a global ENV).
 COPY --chmod=0755 <<"EOF" /usr/local/bin/cargo-nextest-zigbuild
 #!/bin/sh
 set -eu
 REAL_CARGO=/usr/local/cargo/bin/cargo
-if [ "${1:-}" = "test" ]; then
-  export CARGO="$REAL_CARGO"   # avoid recursion: zigbuild must call the real cargo
-  n=$#
-  while [ "$n" -gt 0 ]; do
-    a=$1; shift
-    case "$a" in
-      "$RUST_TARGET")          a="$ZIG_BUILD_TARGET" ;;
-      "--target=$RUST_TARGET") a="--target=$ZIG_BUILD_TARGET" ;;
-    esac
-    set -- "$@" "$a"
-    n=$((n - 1))
-  done
-  exec cargo-zigbuild "$@"
-fi
-exec "$REAL_CARGO" "$@"
+export CARGO="$REAL_CARGO"   # avoid recursion: cargo-zigbuild calls the real cargo via CARGO env
+n=$#
+while [ "$n" -gt 0 ]; do
+  a=$1; shift
+  case "$a" in
+    "$RUST_TARGET")          a="$ZIG_BUILD_TARGET" ;;
+    "--target=$RUST_TARGET") a="--target=$ZIG_BUILD_TARGET" ;;
+  esac
+  set -- "$@" "$a"
+  n=$((n - 1))
+done
+exec cargo-zigbuild "$@"
 EOF
 
 ###############################################################################
