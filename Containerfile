@@ -21,9 +21,6 @@
 
 ARG TORRUST_CARGO_CHEF_VERSION=0.1.78
 ARG CARGO_NEXTEST_VERSION=0.9.140
-ARG CARGO_ZIGBUILD_VERSION=0.24.0
-# Version of the `ziglang` PyPI package (ships the zig toolchain). Bump together with cargo-zigbuild.
-ARG ZIG_VERSION=0.15.1
 # glibc floor for the produced binaries. Must be >= the glibc that the target-arch
 # libssl/libcrypto (Debian trixie = 2.41) were built against, and <= the runtime image's glibc
 # (distroless cc-debian13 = 2.41).
@@ -37,24 +34,22 @@ ARG TEST_GATE_RELEASE=test_release_passed
 ###############################################################################
 ## Builder toolchain (runs on the BUILD platform; shared by every target arch)
 ###############################################################################
-FROM --platform=$BUILDPLATFORM docker.io/library/rust:slim-trixie AS chef
+FROM --platform=$BUILDPLATFORM ghcr.io/rust-cross/cargo-zigbuild:0.24.0 AS chef
 WORKDIR /tmp
 
 # Slowest-changing layers first. Each tool has its own ARG + RUN, so bumping one
 # version only invalidates that tool's layer and the ones after it.
 # libssl-dev (NATIVE arch) is for host-side artifacts only: proc-macros and build scripts
 # (e.g. sqlx-macros -> native-tls -> openssl-sys) are always compiled for the build host.
+# NOTE: zig, cargo-zigbuild, clang, libclang-dev are pre-installed in the image.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl libssl-dev pkg-config python3 python3-venv \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 
-ARG ZIG_VERSION
-RUN python3 -m venv /opt/zig \
- && /opt/zig/bin/pip install --no-cache-dir "ziglang==${ZIG_VERSION}"
-ENV PATH="/opt/zig/bin:${PATH}" \
-    CARGO_ZIGBUILD_PYTHON_PATH=/opt/zig/bin/python \
-    ZIG_GLOBAL_CACHE_DIR=/cache/zig
+# zig is pre-installed at /usr/local/bin/zig (standalone binary from ziglang.org tarball).
+# cargo-zigbuild is pre-installed at /usr/local/cargo/bin/cargo-zigbuild.
+ENV ZIG_GLOBAL_CACHE_DIR=/cache/zig
 
 RUN curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
 
@@ -74,8 +69,7 @@ RUN cargo install --locked --git https://github.com/oskolist/cargo-chef.git torr
 ARG CARGO_NEXTEST_VERSION
 RUN cargo binstall --no-confirm --locked "cargo-nextest@${CARGO_NEXTEST_VERSION}"
 
-ARG CARGO_ZIGBUILD_VERSION
-RUN cargo binstall --no-confirm --locked "cargo-zigbuild@${CARGO_ZIGBUILD_VERSION}"
+# cargo-zigbuild is pre-installed in the ghcr.io/rust-cross/cargo-zigbuild image.
 
 # `cargo nextest archive` builds through `$CARGO test --no-run`. This shim sends that one
 # call through `cargo-zigbuild` (rewriting the canonical `--target` to the glibc-suffixed
@@ -120,12 +114,14 @@ FROM chef AS chef_amd64
 # Set CC/CXX explicitly so the cc crate always finds a zig-backed cross-compiler,
 # even when the env is set via the cargo-nextest shim (where cargo-zigbuild's
 # add_env_if_missing may not propagate to build-script child processes).
+# NOTE: Docker ENV does not support forward-referencing within the same ENV instruction,
+# so the zig target triple is hardcoded (cannot use ${ZIG_TARGET} here).
 ARG GLIBC_VERSION
 ENV RUST_TARGET=x86_64-unknown-linux-gnu \
     ZIG_TARGET=x86_64-linux-gnu \
     DEB_ARCH=amd64 \
-    CC_x86_64_unknown_linux_gnu="zig cc -g -fno-sanitize=all -target ${ZIG_TARGET}.${GLIBC_VERSION}" \
-    CXX_x86_64_unknown_linux_gnu="zig c++ -g -fno-sanitize=all -target ${ZIG_TARGET}.${GLIBC_VERSION}" \
+    CC_x86_64_unknown_linux_gnu="zig cc -g -fno-sanitize=all -target x86_64-linux-gnu.${GLIBC_VERSION}" \
+    CXX_x86_64_unknown_linux_gnu="zig c++ -g -fno-sanitize=all -target x86_64-linux-gnu.${GLIBC_VERSION}" \
     CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-C link-arg=-L/usr/lib/x86_64-linux-gnu" \
     X86_64_UNKNOWN_LINUX_GNU_OPENSSL_LIB_DIR=/usr/lib/x86_64-linux-gnu \
     X86_64_UNKNOWN_LINUX_GNU_OPENSSL_INCLUDE_DIR=/opt/openssl/include
@@ -134,12 +130,14 @@ FROM chef AS chef_arm64
 # Set CC/CXX explicitly so the cc crate always finds a zig-backed cross-compiler,
 # even when the env is set via the cargo-nextest shim (where cargo-zigbuild's
 # add_env_if_missing may not propagate to build-script child processes).
+# NOTE: Docker ENV does not support forward-referencing within the same ENV instruction,
+# so the zig target triple is hardcoded (cannot use ${ZIG_TARGET} here).
 ARG GLIBC_VERSION
 ENV RUST_TARGET=aarch64-unknown-linux-gnu \
     ZIG_TARGET=aarch64-linux-gnu \
     DEB_ARCH=arm64 \
-    CC_aarch64_unknown_linux_gnu="zig cc -g -fno-sanitize=all -target ${ZIG_TARGET}.${GLIBC_VERSION}" \
-    CXX_aarch64_unknown_linux_gnu="zig c++ -g -fno-sanitize=all -target ${ZIG_TARGET}.${GLIBC_VERSION}" \
+    CC_aarch64_unknown_linux_gnu="zig cc -g -fno-sanitize=all -target aarch64-linux-gnu.${GLIBC_VERSION}" \
+    CXX_aarch64_unknown_linux_gnu="zig c++ -g -fno-sanitize=all -target aarch64-linux-gnu.${GLIBC_VERSION}" \
     CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-C link-arg=-L/usr/lib/aarch64-linux-gnu" \
     AARCH64_UNKNOWN_LINUX_GNU_OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu \
     AARCH64_UNKNOWN_LINUX_GNU_OPENSSL_INCLUDE_DIR=/opt/openssl/include
@@ -210,7 +208,7 @@ RUN cargo binstall --no-confirm --locked --disable-strategies compile \
 FROM chef_${TARGETARCH} AS su_exec
 COPY ./contrib/dev-tools/su-exec/ /usr/local/src/su-exec/
 RUN --mount=type=cache,target=/cache/zig \
-    python -m ziglang cc -target "${ZIG_TARGET}" -Wall -Werror -g \
+    zig cc -target "${ZIG_TARGET}" -Wall -Werror -g \
       /usr/local/src/su-exec/su-exec.c -o /usr/local/bin/su-exec \
  && chmod +x /usr/local/bin/su-exec
 
