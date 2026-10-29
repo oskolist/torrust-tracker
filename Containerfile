@@ -115,33 +115,36 @@ EOF
 ## support the GNU ld-only `-rpath-link` argument and rejects it with
 ## "unsupported linker arg: -rpath-link" when linking test binaries.
 FROM chef AS chef_amd64
-# Set CC/CXX explicitly so the cc crate always finds a zig-backed cross-compiler,
-# even when the env is set via the cargo-nextest shim (where cargo-zigbuild's
-# add_env_if_missing may not propagate to build-script child processes).
-# NOTE: Docker ENV does not support forward-referencing within the same ENV instruction,
-# so the zig target triple is hardcoded (cannot use ${ZIG_TARGET} here).
+# We deliberately do NOT set CC_x86_64_unknown_linux_gnu or CXX_* here.
+# When the ENV vars are absent, cargo-zigbuild's `add_env_if_missing`
+# (see cargo-zigbuild src/zig/cargo_env.rs) installs its own `zigcc`
+# wrapper script as CC_*/CXX_*/CARGO_TARGET_*_LINKER. That wrapper
+# (src/zig/wrapper.rs) adds `-g`, `-fno-sanitize=all`, and
+# `-target <glibc-suffixed-zig-triple>`, which are equivalent to the
+# flags we previously hardcoded. Crucially, the wrapper's execute_compiler
+# (src/zig/mod.rs) runs every arg through LinkerArgFilter, which strips
+# `--target=<rust-triple>` (linker_args.rs:105) — the cc crate v1.10.0
+# adds that flag (cc/src/lib.rs:3144) and `zig cc` chokes on it because
+# "unknown" is not a valid zig OS name. If we pre-set CC_* to `zig cc`,
+# add_env_if_missing won't override it (it checks env::var_os), so the
+# wrapper never gets installed and the `--target` flag reaches `zig cc`
+# raw, producing "unable to parse target query 'x86_64-unknown-linux-gnu'".
 ARG GLIBC_VERSION
 ENV RUST_TARGET=x86_64-unknown-linux-gnu \
     ZIG_TARGET=x86_64-linux-gnu \
     DEB_ARCH=amd64 \
-    CC_x86_64_unknown_linux_gnu="zig cc -g -fno-sanitize=all -target x86_64-linux-gnu.${GLIBC_VERSION}" \
-    CXX_x86_64_unknown_linux_gnu="zig c++ -g -fno-sanitize=all -target x86_64-linux-gnu.${GLIBC_VERSION}" \
     CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-C link-arg=-L/usr/lib/x86_64-linux-gnu" \
     X86_64_UNKNOWN_LINUX_GNU_OPENSSL_LIB_DIR=/usr/lib/x86_64-linux-gnu \
     X86_64_UNKNOWN_LINUX_GNU_OPENSSL_INCLUDE_DIR=/opt/openssl/include
 
 FROM chef AS chef_arm64
-# Set CC/CXX explicitly so the cc crate always finds a zig-backed cross-compiler,
-# even when the env is set via the cargo-nextest shim (where cargo-zigbuild's
-# add_env_if_missing may not propagate to build-script child processes).
-# NOTE: Docker ENV does not support forward-referencing within the same ENV instruction,
-# so the zig target triple is hardcoded (cannot use ${ZIG_TARGET} here).
+# See chef_amd64 for why CC_*/CXX_* are NOT set here — cargo-zigbuild's
+# add_env_if_missing installs the zigcc wrapper (which strips --target=)
+# only when those ENV vars are absent.
 ARG GLIBC_VERSION
 ENV RUST_TARGET=aarch64-unknown-linux-gnu \
     ZIG_TARGET=aarch64-linux-gnu \
     DEB_ARCH=arm64 \
-    CC_aarch64_unknown_linux_gnu="zig cc -g -fno-sanitize=all -target aarch64-linux-gnu.${GLIBC_VERSION}" \
-    CXX_aarch64_unknown_linux_gnu="zig c++ -g -fno-sanitize=all -target aarch64-linux-gnu.${GLIBC_VERSION}" \
     CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-C link-arg=-L/usr/lib/aarch64-linux-gnu" \
     AARCH64_UNKNOWN_LINUX_GNU_OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu \
     AARCH64_UNKNOWN_LINUX_GNU_OPENSSL_INCLUDE_DIR=/opt/openssl/include
