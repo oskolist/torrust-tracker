@@ -74,6 +74,9 @@ jobs:
           fi
           echo "platforms=$platforms" >> "$GITHUB_OUTPUT"
 
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+
       - id: build
         name: Build Tracker Image (cargo-zigbuild cross-compile)
         uses: docker/build-push-action@v7.4.0
