@@ -105,13 +105,26 @@ COPY --chmod=0755 <<"EOF" /usr/local/bin/cargo-nextest-zigbuild
 set -eu
 REAL_CARGO=/usr/local/cargo/bin/cargo
 export CARGO="$REAL_CARGO"   # avoid recursion: cargo-zigbuild calls the real cargo via CARGO env
+# Rewrite ONLY the value of `--target` (both `--target <triple>` and
+# `--target=<triple>`). Rewriting *every* argument equal to $RUST_TARGET is
+# wrong: cargo-nextest runs `cargo metadata --format-version=1 --all-features
+# --filter-platform $RUST_TARGET` through this shim (acquire_graph_data in
+# nextest's dispatch/helpers.rs). A glibc-suffixed triple is not a rustc target,
+# so the rewritten value made cargo fail with
+# `could not find specification for target "aarch64-unknown-linux-gnu.2.41"`.
 n=$#
+target_value=
 while [ "$n" -gt 0 ]; do
   a=$1; shift
-  case "$a" in
-    "$RUST_TARGET")          a="$ZIG_BUILD_TARGET" ;;
-    "--target=$RUST_TARGET") a="--target=$ZIG_BUILD_TARGET" ;;
-  esac
+  if [ -n "$target_value" ]; then
+    if [ "$a" = "$RUST_TARGET" ]; then a="$ZIG_BUILD_TARGET"; fi
+    target_value=
+  else
+    case "$a" in
+      --target)                target_value=1 ;;
+      "--target=$RUST_TARGET") a="--target=$ZIG_BUILD_TARGET" ;;
+    esac
+  fi
   set -- "$@" "$a"
   n=$((n - 1))
 done
