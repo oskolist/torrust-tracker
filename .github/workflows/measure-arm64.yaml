@@ -76,6 +76,8 @@ jobs:
 
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@main
+        with:
+          preinstalled-runtimes: true
 
       - id: build
         name: Build Tracker Image (cargo-zigbuild cross-compile)
