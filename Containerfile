@@ -144,7 +144,7 @@ EOF
 ## We use `-L` (not `-rpath-link`) because cargo-zigbuild's `zig cc` wrapper does not
 ## support the GNU ld-only `-rpath-link` argument and rejects it with
 ## "unsupported linker arg: -rpath-link" when linking test binaries.
-FROM chef AS chef_amd64
+FROM --platform=$BUILDPLATFORM chef AS chef_amd64
 # We deliberately do NOT set CC_x86_64_unknown_linux_gnu or CXX_* here.
 # When the ENV vars are absent, cargo-zigbuild's `add_env_if_missing`
 # (see cargo-zigbuild src/zig/cargo_env.rs) installs its own `zigcc`
@@ -167,7 +167,7 @@ ENV RUST_TARGET=x86_64-unknown-linux-gnu \
     X86_64_UNKNOWN_LINUX_GNU_OPENSSL_LIB_DIR=/usr/lib/x86_64-linux-gnu \
     X86_64_UNKNOWN_LINUX_GNU_OPENSSL_INCLUDE_DIR=/opt/openssl/include
 
-FROM chef AS chef_arm64
+FROM --platform=$BUILDPLATFORM chef AS chef_arm64
 # See chef_amd64 for why CC_*/CXX_* are NOT set here — cargo-zigbuild's
 # add_env_if_missing installs the zigcc wrapper (which strips --target=)
 # only when those ENV vars are absent.
@@ -181,7 +181,7 @@ ENV RUST_TARGET=aarch64-unknown-linux-gnu \
 
 ## Target toolchain: rust std for the target + target-arch OpenSSL (dev files only used to LINK).
 # TARGETARCH is provided by buildx (amd64 | arm64)
-FROM chef_${TARGETARCH} AS chef_target
+FROM --platform=$BUILDPLATFORM chef_${TARGETARCH} AS chef_target
 ARG GLIBC_VERSION
 ENV ZIG_BUILD_TARGET="${RUST_TARGET}.${GLIBC_VERSION}"
 
@@ -209,7 +209,7 @@ WORKDIR /build/src
 ###############################################################################
 ## Chef Prepare (platform independent => shared by all target architectures)
 ###############################################################################
-FROM chef AS recipe
+FROM --platform=$BUILDPLATFORM chef AS recipe
 WORKDIR /build/src
 # Canonical cargo-chef planner stage: copy the whole (allow-listed, see .dockerignore)
 # build context and let `cargo chef prepare` enumerate packages and targets itself.
@@ -236,13 +236,13 @@ RUN cargo chef prepare --external-only --recipe-path /build/recipe-thirdparty.js
 ###############################################################################
 
 ## nextest binary for the TARGET arch (downloaded, never executed here) – used by the test stages
-FROM chef_${TARGETARCH} AS nextest_target
+FROM --platform=$BUILDPLATFORM chef_${TARGETARCH} AS nextest_target
 ARG CARGO_NEXTEST_VERSION
 RUN cargo binstall --no-confirm --locked --disable-strategies compile \
       --targets "${RUST_TARGET}" --install-path /out/bin "cargo-nextest@${CARGO_NEXTEST_VERSION}"
 
 ## Su Exe Compile (cross-compiled with `zig cc`, replaces the former gcc stage)
-FROM chef_${TARGETARCH} AS su_exec
+FROM --platform=$BUILDPLATFORM chef_${TARGETARCH} AS su_exec
 COPY ./contrib/dev-tools/su-exec/ /usr/local/src/su-exec/
 RUN --mount=type=cache,target=/cache/zig \
     zig cc -target "${ZIG_TARGET}" -Wall -Werror -g \
@@ -278,7 +278,7 @@ RUN apt-get update \
 ###############################################################################
 ## Cook (debug)
 ###############################################################################
-FROM chef_target AS dependencies_thirdparty_debug
+FROM --platform=$BUILDPLATFORM chef_target AS dependencies_thirdparty_debug
 WORKDIR /build/src
 # Only third-party recipe: immune to workspace Cargo.toml changes.
 COPY --from=recipe /build/recipe-thirdparty.json /build/recipe.json
@@ -288,7 +288,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo chef cook --zigbuild --target "${ZIG_BUILD_TARGET}" \
       --tests --workspace --all-features --recipe-path /build/recipe.json
 
-FROM dependencies_thirdparty_debug AS dependencies_debug
+FROM --platform=$BUILDPLATFORM dependencies_thirdparty_debug AS dependencies_debug
 WORKDIR /build/src
 # Full recipe on top — reuses third-party artifacts from parent layer.
 COPY --from=recipe /build/recipe.json /build/recipe.json
@@ -314,7 +314,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 ###############################################################################
 ## Cook (release)
 ###############################################################################
-FROM chef_target AS dependencies_thirdparty
+FROM --platform=$BUILDPLATFORM chef_target AS dependencies_thirdparty
 WORKDIR /build/src
 # Only third-party recipe: immune to workspace Cargo.toml changes.
 COPY --from=recipe /build/recipe-thirdparty.json /build/recipe.json
@@ -324,7 +324,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo chef cook --zigbuild --target "${ZIG_BUILD_TARGET}" \
       --tests --workspace --all-features --recipe-path /build/recipe.json --release
 
-FROM dependencies_thirdparty AS dependencies
+FROM --platform=$BUILDPLATFORM dependencies_thirdparty AS dependencies
 WORKDIR /build/src
 # Full recipe on top — reuses third-party artifacts from parent layer.
 COPY --from=recipe /build/recipe.json /build/recipe.json
@@ -346,7 +346,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 ###############################################################################
 ## Build Archive (debug) — cross-compiled on the BUILD platform
 ###############################################################################
-FROM dependencies_debug AS build_debug
+FROM --platform=$BUILDPLATFORM dependencies_debug AS build_debug
 WORKDIR /build/src
 COPY . /build/src
 # 1) the nextest archive (consumed by the test stage, on the target platform)
@@ -362,7 +362,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
  && install -D -t /out/bin "target/${RUST_TARGET}/debug/torrust-tracker"
 
 ## Build Archive (release)
-FROM dependencies AS build
+FROM --platform=$BUILDPLATFORM dependencies AS build
 WORKDIR /build/src
 COPY . /build/src
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
@@ -381,7 +381,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 ## No RUN here: nextest is a downloaded target-arch binary, the DB comes from db_init,
 ## and libssl/libcrypto (needed by the test binaries) are copied from `chef_target`.
 ###############################################################################
-FROM --platform=$TARGETPLATFORM docker.io/library/rust:slim-trixie AS tester
+FROM docker.io/library/rust:slim-trixie AS tester
 COPY --from=nextest_target /out/bin/cargo-nextest /usr/local/bin/cargo-nextest
 COPY --from=chef_target /opt/openssl/runtime/ /usr/local/lib/openssl-runtime/
 ENV LD_LIBRARY_PATH=/usr/local/lib/openssl-runtime
@@ -391,9 +391,7 @@ COPY --from=db_init /app/share/ /app/share/
 FROM tester AS test_debug
 WORKDIR /test
 COPY . /test/src/
-COPY --from=build_debug \
-  /build/torrust-tracker-debug.tar.zst \
-  /test/torrust-tracker-debug.tar.zst
+COPY --from=build_debug /build/torrust-tracker-debug.tar.zst /test/torrust-tracker-debug.tar.zst
 RUN cargo nextest run --workspace-remap /test/src/ --extract-to /test/src/ --no-run --archive-file /test/torrust-tracker-debug.tar.zst
 # WORKDIR creates the directory without needing a RUN (replaces `mkdir -p`)
 WORKDIR /test/src/storage/tracker/lib/database
@@ -404,9 +402,7 @@ RUN cargo nextest run --workspace-remap /test/src/ --target-dir-remap /test/src/
 FROM tester AS test
 WORKDIR /test
 COPY . /test/src
-COPY --from=build \
-  /build/torrust-tracker.tar.zst \
-  /test/torrust-tracker.tar.zst
+COPY --from=build /build/torrust-tracker.tar.zst /test/torrust-tracker.tar.zst
 RUN cargo nextest run --workspace-remap /test/src/ --extract-to /test/src/ --no-run --archive-file /test/torrust-tracker.tar.zst
 WORKDIR /test/src/storage/tracker/lib/database
 WORKDIR /test
@@ -432,7 +428,7 @@ FROM ${TEST_GATE_RELEASE} AS release_test_gate
 ## Runtime libs (libssl3t64, zlib1g, libzstd1, libc6) are already part of
 ## gcr.io/distroless/cc-debian13, so nothing is bundled here.
 ###############################################################################
-FROM packager AS app_debug
+FROM --platform=$BUILDPLATFORM packager AS app_debug
 COPY --from=debug_test_gate /gate /tmp/test-gate
 COPY --from=db_init /app/share/ /app/share/
 COPY --from=build_debug /out/bin/ /app/bin/
@@ -441,7 +437,7 @@ RUN for b in /app/bin/*; do echo "== $b"; readelf -d "$b" | grep NEEDED || true;
  && chmod -R u=rw,go=r,a+X /app \
  && chmod -R a+x /app/bin
 
-FROM packager AS app_release
+FROM --platform=$BUILDPLATFORM packager AS app_release
 COPY --from=release_test_gate /gate /tmp/test-gate
 COPY --from=db_init /app/share/ /app/share/
 COPY --from=build /out/bin/ /app/bin/
