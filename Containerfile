@@ -344,22 +344,68 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
  && rm -f /build/temp.tar.zst
 
 ###############################################################################
+## Cook Shipped
+###############################################################################
+## The binaries that ship are built by `cargo build` invocations of their own, never taken from the
+## nextest archives above: `--tests` and `--all-features` enable dev-dependency features and every
+## feature, which would ship every `testing` feature (ADR 20261021190318, rule A.5). The shipped
+## builds use no test flag and name no feature, because the shipped packages need none today; name
+## any feature they need explicitly here and in the "Shipped Features" job of
+## `.github/workflows/testing.yaml`, which checks that no `testing` feature reaches the build.
+##
+## The cook stages stack on the third-party layers of the test cooks, so third-party crates whose
+## features do not differ are compiled once; they only rebuild when the external dependencies change.
+# Cook Third-party Shipped (debug)
+FROM --platform=$BUILDPLATFORM dependencies_thirdparty_debug AS dependencies_shipped_thirdparty_debug
+WORKDIR /build/src
+RUN cargo chef cook --zigbuild --target "${ZIG_BUILD_TARGET}" --package torrust-tracker --bin torrust-tracker --recipe-path /build/recipe.json
+
+# Cook Shipped (debug)
+FROM --platform=$BUILDPLATFORM dependencies_shipped_thirdparty_debug AS dependencies_shipped_debug
+WORKDIR /build/src
+COPY --from=recipe /build/recipe.json /build/recipe.json
+RUN cargo chef cook --zigbuild --target "${ZIG_BUILD_TARGET}" --package torrust-tracker --bin torrust-tracker --recipe-path /build/recipe.json
+
+# Cook Third-party Shipped (release)
+FROM --platform=$BUILDPLATFORM dependencies_thirdparty AS dependencies_shipped_thirdparty
+WORKDIR /build/src
+RUN cargo chef cook --zigbuild --target "${ZIG_BUILD_TARGET}" --release --package torrust-tracker --bins --recipe-path /build/recipe.json
+
+# Cook Shipped (release)
+FROM --platform=$BUILDPLATFORM dependencies_shipped_thirdparty AS dependencies_shipped
+WORKDIR /build/src
+COPY --from=recipe /build/recipe.json /build/recipe.json
+RUN cargo chef cook --zigbuild --target "${ZIG_BUILD_TARGET}" --release --package torrust-tracker --bins --recipe-path /build/recipe.json
+
+# Build Shipped (debug)
+FROM --platform=$BUILDPLATFORM dependencies_shipped_debug AS build_shipped_debug
+WORKDIR /build/src
+COPY . /build/src
+RUN cargo zigbuild --release --target "${ZIG_BUILD_TARGET}" --package torrust-tracker --bin torrust-tracker
+RUN mkdir -p /out/bin && \
+    mv "/build/src/target/${RUST_TARGET}/release/torrust-tracker" "/build/src/target/${RUST_TARGET}/release/http_health_check" /out/bin/
+
+# Build Shipped (release)
+FROM --platform=$BUILDPLATFORM dependencies_shipped AS build_shipped
+WORKDIR /build/src
+COPY . /build/src
+RUN cargo zigbuild --release --target "${ZIG_BUILD_TARGET}" --package torrust-tracker --bins
+RUN mkdir -p /out/bin && \
+    mv "/build/src/target/${RUST_TARGET}/release/torrust-tracker" "/build/src/target/${RUST_TARGET}/release/http_health_check" /out/bin/
+
+###############################################################################
 ## Build Archive (debug) — cross-compiled on the BUILD platform
 ###############################################################################
 FROM --platform=$BUILDPLATFORM dependencies_debug AS build_debug
 WORKDIR /build/src
 COPY . /build/src
-# 1) the nextest archive (consumed by the test stage, on the target platform)
-# 2) the shippable binaries (same cargo profile/flags => reused from step 1, no recompile)
-# NOTE: zigbuild strips the `.<glibc>` suffix for the output dir => target/${RUST_TARGET}/...
+# the nextest archive (consumed by the test stage, on the target platform)
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/cache/zig \
     CARGO=/usr/local/bin/cargo-nextest-zigbuild cargo-nextest nextest archive \
       --target "${RUST_TARGET}" --tests --all-features \
-      --archive-file /build/torrust-tracker-debug.tar.zst \
- && cargo zigbuild --target "${ZIG_BUILD_TARGET}" --bins --all-features \
- && install -D -t /out/bin "target/${RUST_TARGET}/debug/torrust-tracker"
+      --archive-file /build/torrust-tracker-debug.tar.zst
 
 ## Build Archive (release)
 FROM --platform=$BUILDPLATFORM dependencies AS build
@@ -370,11 +416,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/cache/zig \
     CARGO=/usr/local/bin/cargo-nextest-zigbuild cargo-nextest nextest archive \
       --target "${RUST_TARGET}" --tests --all-features \
-      --archive-file /build/torrust-tracker.tar.zst --release \
- && cargo zigbuild --target "${ZIG_BUILD_TARGET}" --bins --all-features --release \
- && install -D -t /out/bin \
-      "target/${RUST_TARGET}/release/torrust-tracker" \
-      "target/${RUST_TARGET}/release/http_health_check"
+      --archive-file /build/torrust-tracker.tar.zst --release
 
 ###############################################################################
 ## Tester Image — the ONLY place that runs on $TARGETPLATFORM.
@@ -396,7 +438,9 @@ RUN cargo nextest run --workspace-remap /test/src/ --extract-to /test/src/ --no-
 # WORKDIR creates the directory without needing a RUN (replaces `mkdir -p`)
 WORKDIR /test/src/storage/tracker/lib/database
 WORKDIR /test
-RUN cargo nextest run --workspace-remap /test/src/ --target-dir-remap /test/src/target/ --cargo-metadata /test/src/target/nextest/cargo-metadata.json --binaries-metadata /test/src/target/nextest/binaries-metadata.json
+# The native-tracker tests start the shipped binary, not the one built with the test features.
+COPY --from=build_shipped_debug /out/bin/torrust-tracker /app/bin/torrust-tracker
+RUN TORRUST_TRACKER_BINARY=/app/bin/torrust-tracker cargo nextest run --workspace-remap /test/src/ --target-dir-remap /test/src/target/ --cargo-metadata /test/src/target/nextest/cargo-metadata.json --binaries-metadata /test/src/target/nextest/binaries-metadata.json
 
 # Extract and Test (release)
 FROM tester AS test
@@ -406,7 +450,12 @@ COPY --from=build /build/torrust-tracker.tar.zst /test/torrust-tracker.tar.zst
 RUN cargo nextest run --workspace-remap /test/src/ --extract-to /test/src/ --no-run --archive-file /test/torrust-tracker.tar.zst
 WORKDIR /test/src/storage/tracker/lib/database
 WORKDIR /test
-RUN cargo nextest run --workspace-remap /test/src/ --target-dir-remap /test/src/target/ --cargo-metadata /test/src/target/nextest/cargo-metadata.json --binaries-metadata /test/src/target/nextest/binaries-metadata.json
+# The native-tracker tests start the shipped binary, not the one built with the test features.
+COPY --from=build_shipped \
+  /out/bin/torrust-tracker \
+  /out/bin/http_health_check \
+  /app/bin/
+RUN TORRUST_TRACKER_BINARY=/app/bin/torrust-tracker cargo nextest run --workspace-remap /test/src/ --target-dir-remap /test/src/target/ --cargo-metadata /test/src/target/nextest/cargo-metadata.json --binaries-metadata /test/src/target/nextest/binaries-metadata.json
 
 ###############################################################################
 ## Test gates: packaging depends on one of these. Selected via TEST_GATE_* build args.
@@ -431,7 +480,7 @@ FROM ${TEST_GATE_RELEASE} AS release_test_gate
 FROM --platform=$BUILDPLATFORM packager AS app_debug
 COPY --from=debug_test_gate /gate /tmp/test-gate
 COPY --from=db_init /app/share/ /app/share/
-COPY --from=build_debug /out/bin/ /app/bin/
+COPY --from=build_shipped_debug /out/bin/ /app/bin/
 RUN for b in /app/bin/*; do echo "== $b"; readelf -d "$b" | grep NEEDED || true; done \
  && chown -R root:root /app \
  && chmod -R u=rw,go=r,a+X /app \
@@ -440,7 +489,7 @@ RUN for b in /app/bin/*; do echo "== $b"; readelf -d "$b" | grep NEEDED || true;
 FROM --platform=$BUILDPLATFORM packager AS app_release
 COPY --from=release_test_gate /gate /tmp/test-gate
 COPY --from=db_init /app/share/ /app/share/
-COPY --from=build /out/bin/ /app/bin/
+COPY --from=build_shipped /out/bin/ /app/bin/
 RUN for b in /app/bin/*; do echo "== $b"; readelf -d "$b" | grep NEEDED || true; done \
  && chown -R root:root /app \
  && chmod -R u=rw,go=r,a+X /app \
